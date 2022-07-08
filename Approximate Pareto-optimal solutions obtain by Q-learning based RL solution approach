@@ -1,6 +1,12 @@
 The Q-learning based RL solution approach is run 10 times to obtain the approximate Pareto-optimal solutions
 
-
+Approximate Pareto-optimal solutions are presented in the following format:
+  # each solultion have two values and four 4D list (the first dimension indicates product ID, the second dimension indicates part variant ID, the third dimension indicates job ID, the forth dimension is a list presenting the operation sequence of the job) 
+  # Line 1st: the first objective function value, the second objective function value
+  # Line 2nd: a list to present the operation sequence of each job
+  # Line 3rd: a list to present the selected machine for performing the corresponding operation in the above operation sequence
+  # Line 4th: a list to present the selecetd configuration on the corresponding selected machine above for performing the corresponding operation in the operation sequence
+  # Line 5th: a list to present the beginning time of processing the corresponding operation in the operation sequence
 
 Run 1: Computation time (0.328125 seconds)
 
