@@ -1,0 +1,726 @@
+# Mass Customization (MC) on a Reconfigurable Manufacturing System (RMS)
+# Minimize the tardiness penalty cost and total cost
+# Exhaustive search is applied to get the exact optimal solutions
+
+
+import numpy as np
+import itertools
+from itertools import permutations
+import copy
+import time
+
+from product import Product
+from machine import Machine
+from operation import Operation
+from part_variant import Part_variant
+
+p0 = time.process_time()
+
+# Parameters
+
+I = [Product(i) for i in range(2)]  # Set of products
+# Define parts in Product 0 & Product 1
+I[0].define_parts(0, 2)
+I[1].define_parts(0, 1)
+I[1].define_parts(1, 1)
+# Define the due date of Product 0 & Product 1
+I[0].define_due_date(15)
+I[1].define_due_date(29)
+# Define the tardiness penalty of Product 0 & Product 1
+I[0].define_penalty(3)
+I[1].define_penalty(2)
+
+M = [Machine(m) for m in range(2)]  # Set of machines
+# Define configurations on Machine 0 & Machine 1
+M[0].define_configurations(2)
+M[1].define_configurations(2)
+# Define reconfiguration time and cost between configurations on Machine 0
+M[0].define_reconfiguration_time(0, 1, 1)
+M[0].define_reconfiguration_time(1, 0, 2)
+M[0].define_reconfiguration_cost(0, 1, 4)
+M[0].define_reconfiguration_cost(1, 0, 3)
+# Define reconfiguration time and cost between configurations on Machine 1
+M[1].define_reconfiguration_time(0, 1, 3)
+M[1].define_reconfiguration_time(1, 0, 4)
+M[1].define_reconfiguration_cost(0, 1, 2)
+M[1].define_reconfiguration_cost(1, 0, 1)
+
+OP = [Operation(op) for op in range(4)]  # Set of operations
+# Define feasible machine and configuration pairs for Operation 0
+OP[0].define_feasible_machine_configuration_pairs([(0, 0), (1, 0)])
+# Define feasible machine and configuration pairs for Operation 1
+OP[1].define_feasible_machine_configuration_pairs([(0, 1)])
+# Define feasible machine and configuration pairs for Operation 2
+OP[2].define_feasible_machine_configuration_pairs([(1, 0)])
+# Define feasible machine and configuration pairs for Operation 3
+OP[3].define_feasible_machine_configuration_pairs([(1, 1)])
+
+V = [Part_variant(v) for v in range(2)]  # Set of part variants
+# Define operations for Part variant 0
+V[0].define_operations_for_part_variant((0, 1, 2))
+# Define operations for Part variant 1
+V[1].define_operations_for_part_variant((1, 2, 3))
+# Define precedent operations for Operation 1 to process Part variant 0
+V[0].define_operation_precedence(1, 0)
+# Define precedent operations for Operations 2 to process Part variant 0
+V[0].define_operation_precedence(2, 0)
+# Define precedent operations for Operations 3 to process Part variant 1
+V[1].define_operation_precedence(3, (1, 2))
+''' Define processing time & cost and setup time & cost of Operation 0 on 
+    Machine 0, Configuration 0 for Part variant 0 '''
+V[0].define_processing_time(0, 0, 0, 1)
+V[0].define_processing_cost(0, 0, 0, 2)
+V[0].define_setup_time(0, 0, 0, 2)
+V[0].define_setup_cost(0, 0, 0, 1)
+''' Define processing time & cost and setup time & cost of Operation 0 on 
+    Machine 1, Configuration 0 for Part variant 0 '''
+V[0].define_processing_time(0, 1, 0, 2)
+V[0].define_processing_cost(0, 1, 0, 1)
+V[0].define_setup_time(0, 1, 0, 1)
+V[0].define_setup_cost(0, 1, 0, 2)
+''' Define processing time & cost and setup time & cost of Operation 1 on 
+    Machine 0, Configuration 1 for Part variant 0 '''
+V[0].define_processing_time(1, 0, 1, 2)
+V[0].define_processing_cost(1, 0, 1, 2)
+V[0].define_setup_time(1, 0, 1, 3)
+V[0].define_setup_cost(1, 0, 1, 4)
+''' Define processing time & cost and setup time & cost of Operation 2 on 
+    Machine 1, Configuration 0 for Part variant 0 '''
+V[0].define_processing_time(2, 1, 0, 3)
+V[0].define_processing_cost(2, 1, 0, 2)
+V[0].define_setup_time(2, 1, 0, 2)
+V[0].define_setup_cost(2, 1, 0, 4)
+''' Define processing time & cost and setup time & cost of Operation 1 on 
+    Machine 0, Configuration 1 for Part variant 1 '''
+V[1].define_processing_time(1, 0, 1, 1)
+V[1].define_processing_cost(1, 0, 1, 3)
+V[1].define_setup_time(1, 0, 1, 3)
+V[1].define_setup_cost(1, 0, 1, 2)
+''' Define processing time & cost and setup time & cost of Operation 2 on 
+    Machine 1, Configuration 0 for Part variant 1 '''
+V[1].define_processing_time(2, 1, 0, 2)
+V[1].define_processing_cost(2, 1, 0, 5)
+V[1].define_setup_time(2, 1, 0, 2)
+V[1].define_setup_cost(2, 1, 0, 1)
+''' Define processing time & cost and setup time & cost of Operation 3 on 
+    Machine 0, Configuration 1 for Part variant 1 '''
+V[1].define_processing_time(3, 1, 1, 3)
+V[1].define_processing_cost(3, 1, 1, 4)
+V[1].define_setup_time(3, 1, 1, 1)
+V[1].define_setup_cost(3, 1, 1, 5)
+
+# total operations
+opn = 0
+for i in I:
+    for v, j in i.J.items():
+        opn = opn + len(V[v].VP) * j
+
+# Feasible operation sequences for part variants
+qv = [[] for v in range(len(V))]
+for v in V:
+    for item in itertools.permutations(v.VP):
+        for e in item:
+            if isinstance(v.K[e], int):
+                if not v.K[e] in list(item)[:list(item).index(e)]:
+                    break
+            if v.K[e]:
+                if not set(v.K[e]).issubset(set(
+                        list(item)[:list(item).index(e)])):
+                    break
+        else:
+            qv[v.part_variant_id].append(list(item))
+
+
+# Feasible process plan for each part variant
+class pmg:
+
+    def __init__(self, v):
+        self.p = []
+        self.m = []
+        self.g = []
+        self.v = v.part_variant_id
+        for s in qv[self.v]:
+            if len(s) == 1:
+                for mg in OP[s[0]].feasible_mg_pairs:
+                    self.p.append(s)
+                    self.m.append(mg[0])
+                    self.g.append(mg[1])
+            elif len(s) == 2:
+                for item in itertools.product(OP[s[0]].feasible_mg_pairs,
+                                              OP[s[1]].feasible_mg_pairs):
+                    self.p.append(s)
+                    tm = []
+                    tg = []
+                    for c in item:
+                        tm.append(c[0])
+                        tg.append(c[1])
+                    self.m.append(tm)
+                    self.g.append(tg)
+            else:
+                ts = [list(item) for item in
+                      itertools.product(OP[s[0]].feasible_mg_pairs,
+                                        OP[s[1]].feasible_mg_pairs)]
+                for q in range(2, len(s)):
+                    tmp = [list(item) for item in
+                           itertools.product(ts, OP[s[q]].feasible_mg_pairs)]
+                    ts.clear()
+                    for item in tmp:
+                        new = copy.deepcopy(item[0])
+                        new.append(item[1])
+                        ts.append(new)
+                for cs in ts:
+                    self.p.append(s)
+                    tm = []
+                    tg = []
+                    for c in cs:
+                        tm.append(c[0])
+                        tg.append(c[1])
+                    self.m.append(tm)
+                    self.g.append(tg)
+
+
+fpv = []
+for v in V:
+    fpv.append(pmg(v))
+
+
+# Feasible process planning for job sequence
+class pp:
+
+    def __init__(self, js):
+        self.jp = []
+        self.jm = []
+        self.jg = []
+        if len(js) == 1:
+            jv = fpv[js[0][1]]
+            self.jp = jv.p
+            self.jm = jv.m
+            self.jg = jv.g
+        elif len(js) == 2:
+            jv = [fpv[js[0][1]], fpv[js[1][1]]]
+            for item in itertools.product(range(len(jv[0].p)),
+                                          range(len(jv[1].p))):
+                self.jp.append([jv[0].p[item[0]], jv[1].p[item[1]]])
+                self.jm.append([jv[0].m[item[0]], jv[1].m[item[1]]])
+                self.jg.append([jv[0].g[item[0]], jv[1].g[item[1]]])
+        else:
+            jv = [fpv[js[j][1]] for j in range(len(js))]
+            tp = [list(item) for item in itertools.product(
+                range(len(jv[0].p)), range(len(jv[1].p)))]
+            for j in range(2, len(js)):
+                tmp = [list(item) for item in
+                       itertools.product(tp, range(len(jv[j].p)))]
+                tp.clear()
+                for item in tmp:
+                    new = copy.deepcopy(item[0])
+                    new.append(item[1])
+                    tp.append(new)
+            for i in tp:
+                nwp = []
+                nwm = []
+                nwg = []
+                for j in range(len(js)):
+                    nwp.append(jv[j].p[i[j]])
+                    nwm.append(jv[j].m[i[j]])
+                    nwg.append(jv[j].g[i[j]])
+                self.jp.append(nwp)
+                self.jm.append(nwm)
+                self.jg.append(nwg)
+
+
+jb = []
+for i in I:
+    for v, num_j in i.J.items():
+        for j in range(num_j):
+            jb.append([i.product_id, v, j])
+
+fpp = pp(jb)
+
+
+class slt:
+
+    def __init__(self, slt_rho, slt_alpha, slt_phi, slt_beta, slt_f1, slt_f2,
+                 slt_tpc, slt_trc, slt_tsc):
+        self.rho = slt_rho
+        self.alpha = slt_alpha
+        self.phi = slt_phi
+        self.beta = slt_beta
+        self.f1 = slt_f1
+        self.f2 = slt_f2
+        self.tpc = slt_tpc
+        self.trc = slt_trc
+        self.tsc = slt_tsc
+
+
+class pp_slt:
+
+    def product_completion_time(self):
+        # Calculate the completion time for each product
+        T = []
+        for i in I:
+            temp = []
+            for v, num_j in i.J.items():
+                temp.append(max(self.beta[i.product_id][v][j][- 1] +
+                                V[v].PT[(self.rho[i.product_id][v][j][- 1],
+                                      self.alpha[i.product_id][v][j][- 1],
+                                      self.phi[i.product_id][v][j][- 1])]
+                                for j in range(num_j)))
+            T.append(max(temp))
+        return T
+
+    # Objective functions
+    # First objective function.
+
+    def function1(self):
+        # Calculate the tardiness for each product
+        C = self.product_completion_time()
+        # Calculate the penalty for tardiness
+        value = sum(max(0, C[i.product_id] - i.due_date) * i.penalty for i in I)
+        return value
+
+    # Second objective function.
+
+    def function2(self):
+        value = self.tpc + self.trc + self.tsc
+        return value
+
+    def __init__(self, ro, rf, fi):
+        self.pp_slt = []
+        self.rho = ro
+        self.alpha = rf
+        self.phi = fi
+        self.tpc = 0
+        opn = 0
+        for i in I:
+            for v, num_j in i.J.items():
+                for j in range(num_j):
+                    opn = opn + len(V[v].VP)
+                    for q in range(len(V[v].VP)):
+                        self.tpc = self.tpc + \
+                                   V[v].PC[(self.rho[i.product_id][v][j][q],
+                                            self.alpha[i.product_id][v][j][q],
+                                            self.phi[i.product_id][v][j][q])]
+        mes = [[] for m in range(len(M))]
+        mgs = [[] for m in range(len(M))]
+        mis = [[] for m in range(len(M))]
+        mvs = [[] for m in range(len(M))]
+        mjs = [[] for m in range(len(M))]
+        mqs = [[] for m in range(len(M))]
+        for i in I:
+            for v, num_j in i.J.items():
+                for j in range(num_j):
+                    for q in range(len(V[v].VP)):
+                        mes[self.alpha[i.product_id][v][j][q]].append(
+                            self.rho[i.product_id][v][j][q])
+                        mgs[self.alpha[i.product_id][v][j][q]].append(
+                            self.phi[i.product_id][v][j][q])
+                        mis[self.alpha[i.product_id][v][j][q]].append(
+                            i.product_id)
+                        mvs[self.alpha[i.product_id][v][j][q]].append(v)
+                        mjs[self.alpha[i.product_id][v][j][q]].append(j)
+                        mqs[self.alpha[i.product_id][v][j][q]].append(q)
+        f_mes = [[] for m in range(len(M))]
+        f_mgs = [[] for m in range(len(M))]
+        f_mis = [[] for m in range(len(M))]
+        f_mvs = [[] for m in range(len(M))]
+        f_mjs = [[] for m in range(len(M))]
+        f_mqs = [[] for m in range(len(M))]
+        for m in range(len(M)):
+            if len(mes[m]) > 0:
+                for item in permutations([i for i in range(len(mes[m]))]):
+                    temp_mes = np.array(mes[m])[list(item)]
+                    temp_mgs = np.array(mgs[m])[list(item)]
+                    temp_mis = np.array(mis[m])[list(item)]
+                    temp_mvs = np.array(mvs[m])[list(item)]
+                    temp_mjs = np.array(mjs[m])[list(item)]
+                    temp_mqs = np.array(mqs[m])[list(item)]
+                    jdg = 1
+                    for k in range(len(mes[m])):
+                        for k_ in range(k):
+                            if temp_mis[k] == temp_mis[k_] and \
+                                    temp_mvs[k] == temp_mvs[k_] and \
+                                    temp_mjs[k] == temp_mjs[k_]:
+                                if temp_mqs[k] < temp_mqs[k_]:
+                                    jdg = 0
+                    if jdg == 1:
+                        f_mes[m].append(temp_mes)
+                        f_mgs[m].append(temp_mgs)
+                        f_mis[m].append(temp_mis)
+                        f_mvs[m].append(temp_mvs)
+                        f_mjs[m].append(temp_mjs)
+                        f_mqs[m].append(temp_mqs)
+        mw = []
+        for m in range(len(M)):
+            if f_mes[m]:
+                mw.append(m)
+        if len(mw) == 1:
+            m = mw[0]
+            for xs in range(len(f_mes[m])):
+                self.trc = 0
+                self.tsc = 0
+                self.beta = [[[] for v in V] for i in I]
+                for i in I:
+                    for v in V:
+                        if v.part_variant_id in i.J.keys():
+                            self.beta[i.product_id][v.part_variant_id] = [
+                                [] for j in range(i.J[v.part_variant_id])]
+                            for j in range(i.J[v.part_variant_id]):
+                                for q in range(len(v.VP)):
+                                    self.beta[i.product_id][v.part_variant_id][
+                                        j].append(0)
+                tt = 0
+                ce = - 1
+                cg = - 1
+                cv = - 1
+                for xe in range(len(f_mes[m][xs])):
+                    te = f_mes[m][xs][xe]
+                    tg = f_mgs[m][xs][xe]
+                    ti = f_mis[m][xs][xe]
+                    tv = f_mvs[m][xs][xe]
+                    tj = f_mjs[m][xs][xe]
+                    tq = f_mqs[m][xs][xe]
+                    if tt == 0:
+                        self.beta[ti][tv][tj][tq] = V[tv].ST[(te, m, tg)]
+                        self.tsc = V[tv].SC[(te, m, tg)]
+                    else:
+                        if cg == tg:
+                            rt = 0
+                            rc = 0
+                        else:
+                            rt = M[m].RT[cg][tg]
+                            rc = M[m].RC[cg][tg]
+                        if cv == tv and ce == te and cg == tg:
+                            st = 0
+                            sc = 0
+                        else:
+                            st = V[tv].ST[(te, m, tg)]
+                            sc = V[tv].SC[(te, m, tg)]
+                        self.beta[ti][tv][tj][tq] = tt + rt + st
+                        self.trc = self.trc + rc
+                        self.tsc = self.tsc + sc
+                    tt = self.beta[ti][tv][tj][tq] + V[tv].PT[(te, m, tg)]
+                    ce = te
+                    cg = tg
+                    cv = tv
+                self.f1 = self.function1()
+                self.f2 = self.function2()
+                self.pp_slt.append(
+                    slt(self.rho, self.alpha, self.phi, self.beta, self.f1,
+                        self.f2, self.tpc, self.trc, self.tsc))
+        elif len(mw) == 2:
+            for xs in itertools.product(range(len(f_mes[mw[0]])),
+                                        range(len(f_mes[mw[1]]))):
+                self.trc = 0
+                self.tsc = 0
+                self.beta = [[[] for v in V] for i in I]
+                for i in I:
+                    for v in V:
+                        if v.part_variant_id in i.J.keys():
+                            self.beta[i.product_id][v.part_variant_id] = [
+                                [] for j in range(i.J[v.part_variant_id])]
+                            for j in range(i.J[v.part_variant_id]):
+                                for q in range(len(v.VP)):
+                                    self.beta[i.product_id][v.part_variant_id][
+                                        j].append(0)
+                tt = [0 for m in range(len(mw))]
+                ce = [- 1 for m in range(len(mw))]
+                cg = [- 1 for m in range(len(mw))]
+                cv = [- 1 for m in range(len(mw))]
+                fn = []
+                xe = [0 for m in range(len(mw))]
+                cnt = 0
+                for m in range(len(mw)):
+                    if f_mqs[mw[m]][xs[m]][0] == 0:
+                        te = f_mes[mw[m]][xs[m]][0]
+                        tg = f_mgs[mw[m]][xs[m]][0]
+                        ti = f_mis[mw[m]][xs[m]][0]
+                        tv = f_mvs[mw[m]][xs[m]][0]
+                        tj = f_mjs[mw[m]][xs[m]][0]
+                        tq = f_mqs[mw[m]][xs[m]][0]
+                        self.beta[ti][tv][tj][tq] = V[tv].ST[(te, mw[m], tg)]
+                        sc = V[tv].SC[(te, mw[m], tg)]
+                        self.tsc = self.tsc + sc
+                        tt[m] = self.beta[ti][tv][tj][tq] + \
+                            V[tv].PT[(te, mw[m], tg)]
+                        ce[m] = te
+                        cg[m] = tg
+                        cv[m] = tv
+                        fn.append([ti, tv, tj, tq])
+                        xe[m] = 1
+                        cnt = cnt + 1
+                m = 0
+                km = 0
+                while cnt < opn:
+                    if km == 2:
+                        break
+                    if xe[m] < len(f_mes[mw[m]][xs[m]]):
+                        te = f_mes[mw[m]][xs[m]][xe[m]]
+                        tg = f_mgs[mw[m]][xs[m]][xe[m]]
+                        ti = f_mis[mw[m]][xs[m]][xe[m]]
+                        tv = f_mvs[mw[m]][xs[m]][xe[m]]
+                        tj = f_mjs[mw[m]][xs[m]][xe[m]]
+                        tq = f_mqs[mw[m]][xs[m]][xe[m]]
+                        if tq == 0:
+                            if cg[m] == tg:
+                                rt = 0
+                                rc = 0
+                            else:
+                                rt = M[mw[m]].RT[cg[m]][tg]
+                                rc = M[mw[m]].RC[cg[m]][tg]
+                            if cv[m] == tv and ce[m] == te and cg[m] == tg:
+                                st = 0
+                                sc = 0
+                            else:
+                                st = V[tv].ST[(te, mw[m], tg)]
+                                sc = V[tv].SC[(te, mw[m], tg)]
+                            self.beta[ti][tv][tj][tq] = tt[m] + rt + st
+                            self.trc = self.trc + rc
+                            self.tsc = self.tsc + sc
+                            km = 0
+                        elif [ti, tv, tj, tq - 1] in fn:
+                            if cg[m] == tg:
+                                rt = 0
+                                rc = 0
+                            else:
+                                rt = M[mw[m]].RT[cg[m]][tg]
+                                rc = M[mw[m]].RC[cg[m]][tg]
+                            if cv[m] == tv and ce[m] == te and cg[m] == tg:
+                                st = 0
+                                sc = 0
+                            else:
+                                st = V[tv].ST[(te, mw[m], tg)]
+                                sc = V[tv].SC[(te, mw[m], tg)]
+                            tm = tt[m] + rt + st
+                            tf = self.beta[ti][tv][tj][tq - 1] + V[tv].PT[(
+                                self.rho[ti][tv][tj][tq - 1],
+                                self.alpha[ti][tv][tj][tq - 1],
+                                self.phi[ti][tv][tj][tq - 1])]
+                            th = tm - tf
+                            if th >= 0:
+                                self.beta[ti][tv][tj][tq] = tm
+                            else:
+                                self.beta[ti][tv][tj][tq] = tf
+                            self.trc = self.trc + rc
+                            self.tsc = self.tsc + sc
+                            km = 0
+                        else:
+                            m = m + 1
+                            if m == 2:
+                                m = 0
+                            km = km + 1
+                            continue
+                        tt[m] = self.beta[ti][tv][tj][tq] + \
+                            V[tv].PT[(te, mw[m], tg)]
+                        ce[m] = te
+                        cg[m] = tg
+                        cv[m] = tv
+                        fn.append([ti, tv, tj, tq])
+                        xe[m] = xe[m] + 1
+                        cnt = cnt + 1
+                    else:
+                        m = m + 1
+                        if m == 2:
+                            m = 0
+                        km = km + 1
+                if km == 2:
+                    continue
+                self.f1 = self.function1()
+                self.f2 = self.function2()
+                self.pp_slt.append(
+                    slt(self.rho, self.alpha, self.phi, self.beta, self.f1,
+                        self.f2, self.tpc, self.trc, self.tsc))
+        else:
+            ts = [list(item) for item in itertools.product(range(len(
+                f_mes[mw[0]])), range(len(f_mes[mw[1]])))]
+            for m in range(2, len(mw)):
+                tmp = [list(item) for item in itertools.product(
+                    ts, range(len(f_mes[mw[m]])))]
+                ts.clear()
+                for item in tmp:
+                    new = copy.deepcopy(item[0])
+                    new.append(item[1])
+                    ts.append(new)
+            for xs in ts:
+                self.trc = 0
+                self.tsc = 0
+                self.beta = [[[] for v in V] for i in I]
+                for i in I:
+                    for v in V:
+                        if v.part_variant_id in i.J.keys():
+                            self.beta[i.product_id][v.part_variant_id] = [
+                                [] for j in range(i.J[v.part_variant_id])]
+                            for j in range(i.J[v.part_variant_id]):
+                                for q in range(len(v.VP)):
+                                    self.beta[i.product_id][v.part_variant_id][
+                                        j].append(0)
+                tt = [0 for m in range(len(mw))]
+                ce = [- 1 for m in range(len(mw))]
+                cg = [- 1 for m in range(len(mw))]
+                cv = [- 1 for m in range(len(mw))]
+                fn = []
+                xe = [0 for m in range(len(mw))]
+                cnt = 0
+                for m in range(len(mw)):
+                    if f_mqs[mw[m]][xs[m]][0] == 0:
+                        te = f_mes[mw[m]][xs[m]][0]
+                        tg = f_mgs[mw[m]][xs[m]][0]
+                        ti = f_mis[mw[m]][xs[m]][0]
+                        tv = f_mvs[mw[m]][xs[m]][0]
+                        tj = f_mjs[mw[m]][xs[m]][0]
+                        tq = f_mqs[mw[m]][xs[m]][0]
+                        self.beta[ti][tv][tj][tq] = V[tv].ST[(te, mw[m], tg)]
+                        sc = V[tv].SC[(te, mw[m], tg)]
+                        self.tsc = self.tsc + sc
+                        tt[m] = self.beta[ti][tv][tj][tq] + \
+                            V[tv].PT[(te, mw[m], tg)]
+                        ce[m] = te
+                        cg[m] = tg
+                        cv[m] = tv
+                        fn.append([ti, tv, tj, tq])
+                        xe[m] = 1
+                        cnt = cnt + 1
+                m = 0
+                km = 0
+                while cnt < opn:
+                    if km == len(mw):
+                        break
+                    if xe[m] < len(f_mes[mw[m]][xs[m]]):
+                        te = f_mes[mw[m]][xs[m]][xe[m]]
+                        tg = f_mgs[mw[m]][xs[m]][xe[m]]
+                        ti = f_mis[mw[m]][xs[m]][xe[m]]
+                        tv = f_mvs[mw[m]][xs[m]][xe[m]]
+                        tj = f_mjs[mw[m]][xs[m]][xe[m]]
+                        tq = f_mqs[mw[m]][xs[m]][xe[m]]
+                        if tq == 0:
+                            if cg[m] == tg:
+                                rt = 0
+                                rc = 0
+                            else:
+                                rt = M[mw[m]].RT[cg[m]][tg]
+                                rc = M[mw[m]].RC[cg[m]][tg]
+                            if cv[m] == tv and ce[m] == te and cg[m] == tg:
+                                st = 0
+                                sc = 0
+                            else:
+                                st = V[tv].ST[(te, mw[m], tg)]
+                                sc = V[tv].SC[(te, mw[m], tg)]
+                            self.beta[ti][tv][tj][tq] = tt[m] + rt + st
+                            self.trc = self.trc + rc
+                            self.tsc = self.tsc + sc
+                            km = 0
+                        elif [ti, tv, tj, tq - 1] in fn:
+                            if cg[m] == tg:
+                                rt = 0
+                                rc = 0
+                            else:
+                                rt = M[mw[m]].RT[cg[m]][tg]
+                                rc = M[mw[m]].RC[cg[m]][tg]
+                            if cv[m] == tv and ce[m] == te and cg[m] == tg:
+                                st = 0
+                                sc = 0
+                            else:
+                                st = V[tv].ST[(te, mw[m], tg)]
+                                sc = V[tv].SC[(te, mw[m], tg)]
+                            tm = tt[m] + rt + st
+                            tf = self.beta[ti][tv][tj][tq - 1] + V[tv].PT[(
+                                self.rho[ti][tv][tj][tq - 1],
+                                self.alpha[ti][tv][tj][tq - 1],
+                                self.phi[ti][tv][tj][tq - 1])]
+                            th = tm - tf
+                            if th >= 0:
+                                self.beta[ti][tv][tj][tq] = tm
+                            else:
+                                self.beta[ti][tv][tj][tq] = tf
+                            self.trc = self.trc + rc
+                            self.tsc = self.tsc + sc
+                            km = 0
+                        else:
+                            m = m + 1
+                            if m == len(mw):
+                                m = 0
+                            km = km + 1
+                            continue
+                        tt[m] = self.beta[ti][tv][tj][tq] + \
+                                V[tv].PT[(te, mw[m], tg)]
+                        ce[m] = te
+                        cg[m] = tg
+                        cv[m] = tv
+                        fn.append([ti, tv, tj, tq])
+                        xe[m] = xe[m] + 1
+                        cnt = cnt + 1
+                    else:
+                        m = m + 1
+                        if m == len(mw):
+                            m = 0
+                        km = km + 1
+                if km == len(mw):
+                    continue
+                self.f1 = self.function1()
+                self.f2 = self.function2()
+                self.pp_slt.append(
+                    slt(self.rho, self.alpha, self.phi, self.beta, self.f1,
+                        self.f2, self.tpc, self.trc, self.tsc))
+
+
+# Main program starts here
+ttl_slt = []
+pr = [[[] for v in V] for i in I]
+pa = [[[] for v in V] for i in I]
+ph = [[[] for v in V] for i in I]
+for i in I:
+    for v in V:
+        if v.part_variant_id in i.J.keys():
+            pr[i.product_id][v.part_variant_id] = [[] for j in range(
+                i.J[v.part_variant_id])]
+            pa[i.product_id][v.part_variant_id] = [[] for j in range(
+                i.J[v.part_variant_id])]
+            ph[i.product_id][v.part_variant_id] = [[] for j in range(
+                i.J[v.part_variant_id])]
+            for j in range(i.J[v.part_variant_id]):
+                for q in range(len(v.VP)):
+                    pr[i.product_id][v.part_variant_id][j].append(0)
+                    pa[i.product_id][v.part_variant_id][j].append(0)
+                    ph[i.product_id][v.part_variant_id][j].append(0)
+for p in range(len(fpp.jp)):
+    for jd in range(len(jb)):
+        i = jb[jd][0]
+        v = jb[jd][1]
+        j = jb[jd][2]
+        for q in range(len(V[v].VP)):
+            pr[i][v][j][q] = fpp.jp[p][jd][q]
+            pa[i][v][j][q] = fpp.jm[p][jd][q]
+            ph[i][v][j][q] = fpp.jg[p][jd][q]
+    sp = pp_slt(pr, pa, ph)
+    temp = copy.deepcopy(sp.pp_slt)
+    ttl_slt.extend(temp)
+V1 = [s.f1 for s in ttl_slt]
+V2 = [s.f2 for s in ttl_slt]
+ds = [0 for i in range(len(ttl_slt))]
+for v in range(len(ttl_slt) - 1):
+    if ds[v] == - 1:
+        continue
+    for u in range(v + 1, len(ttl_slt)):
+        if ds[u] == - 1:
+            continue
+        if (V1[u] < V1[v] and V2[u] < V2[v]) or \
+                (V1[u] == V1[v] and V2[u] < V2[v]) or \
+                (V1[u] < V1[v] and V2[u] == V2[v]):
+            ds[v] = - 1
+        if (V1[v] < V1[u] and V2[v] < V2[u]) or \
+                (V1[v] == V1[u] and V2[v] < V2[u]) or \
+                (V1[v] < V1[u] and V2[v] == V2[u]):
+            ds[u] = - 1
+opt_f1 = []
+opt_f2 = []
+for i in range(len(ttl_slt)):
+    if ds[i] == 0:
+        opt_f1.append(ttl_slt[i].f1)
+        opt_f2.append(ttl_slt[i].f2)
+        print(ttl_slt[i].f1, ttl_slt[i].f2)
+        print(ttl_slt[i].rho)
+        print(ttl_slt[i].alpha)
+        print(ttl_slt[i].phi)
+        print(ttl_slt[i].beta)
+        print('')
+p1 = time.process_time()
+print(p1 - p0)
