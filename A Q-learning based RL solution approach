@@ -1,0 +1,746 @@
+# Mass Customization (MC) on a Reconfigurable Manufacturing System (RMS)
+# Minimize the tardiness penalty cost and total cost
+# Q-learning is applied to get the approximate Pareto-optimal solutions
+
+
+import numpy as np
+import random
+import math
+import time
+
+from product import Product
+from machine import Machine
+from operation import Operation
+from part_variant import Part_variant
+
+p0 = time.process_time()
+
+# Parameters
+
+I = [Product(i) for i in range(2)]  # Set of products
+# Define parts in Product 0 & Product 1
+I[0].define_parts(0, 2)
+I[1].define_parts(0, 1)
+I[1].define_parts(1, 1)
+# Define the due date of Product 0 & Product 1
+I[0].define_due_date(15)
+I[1].define_due_date(29)
+# Define the tardiness penalty of Product 0 & Product 1
+I[0].define_penalty(3)
+I[1].define_penalty(2)
+
+M = [Machine(m) for m in range(2)]  # Set of machines
+# Define configurations on Machine 0 & Machine 1
+M[0].define_configurations(2)
+M[1].define_configurations(2)
+# Define reconfiguration time and cost between configurations on Machine 0
+M[0].define_reconfiguration_time(0, 1, 1)
+M[0].define_reconfiguration_time(1, 0, 2)
+M[0].define_reconfiguration_cost(0, 1, 4)
+M[0].define_reconfiguration_cost(1, 0, 3)
+# Define reconfiguration time and cost between configurations on Machine 1
+M[1].define_reconfiguration_time(0, 1, 3)
+M[1].define_reconfiguration_time(1, 0, 4)
+M[1].define_reconfiguration_cost(0, 1, 2)
+M[1].define_reconfiguration_cost(1, 0, 1)
+
+OP = [Operation(op) for op in range(4)]  # Set of operations
+# Define feasible machine and configuration pairs for Operation 0
+OP[0].define_feasible_machine_configuration_pairs([(0, 0), (1, 0)])
+# Define feasible machine and configuration pairs for Operation 1
+OP[1].define_feasible_machine_configuration_pairs([(0, 1)])
+# Define feasible machine and configuration pairs for Operation 2
+OP[2].define_feasible_machine_configuration_pairs([(1, 0)])
+# Define feasible machine and configuration pairs for Operation 3
+OP[3].define_feasible_machine_configuration_pairs([(1, 1)])
+
+V = [Part_variant(v) for v in range(2)]  # Set of part variants
+# Define operations for Part variant 0
+V[0].define_operations_for_part_variant((0, 1, 2))
+# Define operations for Part variant 1
+V[1].define_operations_for_part_variant((1, 2, 3))
+# Define precedent operations for Operation 1 to process Part variant 0
+V[0].define_operation_precedence(1, 0)
+# Define precedent operations for Operations 2 to process Part variant 0
+V[0].define_operation_precedence(2, 0)
+# Define precedent operations for Operations 3 to process Part variant 1
+V[1].define_operation_precedence(3, (1, 2))
+''' Define processing time & cost and setup time & cost of Operation 0 on 
+    Machine 0, Configuration 0 for Part variant 0 '''
+V[0].define_processing_time(0, 0, 0, 1)
+V[0].define_processing_cost(0, 0, 0, 2)
+V[0].define_setup_time(0, 0, 0, 2)
+V[0].define_setup_cost(0, 0, 0, 1)
+''' Define processing time & cost and setup time & cost of Operation 0 on 
+    Machine 1, Configuration 0 for Part variant 0 '''
+V[0].define_processing_time(0, 1, 0, 2)
+V[0].define_processing_cost(0, 1, 0, 1)
+V[0].define_setup_time(0, 1, 0, 1)
+V[0].define_setup_cost(0, 1, 0, 2)
+''' Define processing time & cost and setup time & cost of Operation 1 on 
+    Machine 0, Configuration 1 for Part variant 0 '''
+V[0].define_processing_time(1, 0, 1, 2)
+V[0].define_processing_cost(1, 0, 1, 2)
+V[0].define_setup_time(1, 0, 1, 3)
+V[0].define_setup_cost(1, 0, 1, 4)
+''' Define processing time & cost and setup time & cost of Operation 2 on 
+    Machine 1, Configuration 0 for Part variant 0 '''
+V[0].define_processing_time(2, 1, 0, 3)
+V[0].define_processing_cost(2, 1, 0, 2)
+V[0].define_setup_time(2, 1, 0, 2)
+V[0].define_setup_cost(2, 1, 0, 4)
+''' Define processing time & cost and setup time & cost of Operation 1 on 
+    Machine 0, Configuration 1 for Part variant 1 '''
+V[1].define_processing_time(1, 0, 1, 1)
+V[1].define_processing_cost(1, 0, 1, 3)
+V[1].define_setup_time(1, 0, 1, 3)
+V[1].define_setup_cost(1, 0, 1, 2)
+''' Define processing time & cost and setup time & cost of Operation 2 on 
+    Machine 1, Configuration 0 for Part variant 1 '''
+V[1].define_processing_time(2, 1, 0, 2)
+V[1].define_processing_cost(2, 1, 0, 5)
+V[1].define_setup_time(2, 1, 0, 2)
+V[1].define_setup_cost(2, 1, 0, 1)
+''' Define processing time & cost and setup time & cost of Operation 3 on 
+    Machine 1, Configuration 1 for Part variant 1 '''
+V[1].define_processing_time(3, 1, 1, 3)
+V[1].define_processing_cost(3, 1, 1, 4)
+V[1].define_setup_time(3, 1, 1, 1)
+V[1].define_setup_cost(3, 1, 1, 5)
+
+# RL parameters
+EPSILON = 0.9  # greedy police
+# Number of states
+NUM_STATES = 0
+for i in I:
+    for v, j in i.J.items():
+        NUM_STATES = NUM_STATES + len(V[v].VP) * j
+NUM_EPISODES = int(math.pow(3, int(NUM_STATES / 2)))  # maximum episodes
+
+
+class Job_Sheet:
+    """ save the completion time, processing machine and configuration for each
+    operation in a job """
+
+    def __init__(self, v):
+        self.ebt = {}
+        self.ect = {}
+        self.em = {}
+        self.eg = {}
+        for e in V[v].VP:
+            self.ebt[e] = 0
+            self.ect[e] = 0
+            self.em[e] = -1
+            self.eg[e] = -1
+
+
+class Machine_Sheet:
+    """ save the completion time, configuration, operation and part variant last
+    performed on a machine """
+
+    def __init__(self):
+        self.mct = 0
+        self.g = -1
+        self.e = -1
+        self.v = -1
+
+
+def set_to_do(state_of_i, not_do_i):
+    tmp = []
+    for item in not_do_i:
+        v = item[0]
+        j = item[1]
+        e = item[2]
+        ready = 1
+        if isinstance(V[v].K[e], int):
+            precedent_e = V[v].K[e]
+            if state_of_i[v][j].em[precedent_e] == -1:
+                ready = 0
+        elif V[v].K[e]:
+            for precedent_e in V[v].K[e]:
+                if state_of_i[v][j].em[precedent_e] == -1:
+                    ready = 0
+                    break
+        if ready == 1:
+            tmp.append((v, j, e))
+    return tmp
+
+
+def select_machine(state_of_machines, exclusion_list):
+    # select a machine to make further decisions (perform an operation)
+    idle_machines = []
+    machines_mct = {}
+    for key, value in state_of_machines.items():
+        if key not in exclusion_list:
+            machines_mct[key] = value.mct
+    tmp = min(machines_mct.values())
+    for key, value in machines_mct.items():
+        if value == tmp:
+            idle_machines.append(key)
+    if len(idle_machines) == 1:
+        selected_m = idle_machines[0]
+    else:
+        selected_m = random.choice(idle_machines)
+    return selected_m
+
+
+def set_m_to_do(to_do_dict, selected_machine):
+    # collect pending operations able to be performed on the selected machine
+    m_to_do_dict = {}
+    for i, to_do_list in to_do_dict.items():
+        for item in to_do_list:
+            v = item[0]
+            j = item[1]
+            e = item[2]
+            for mg in OP[e].feasible_mg_pairs:
+                if mg[0] == selected_machine:
+                    if i in m_to_do_dict.keys():
+                        m_to_do_dict[i].append((v, j, e))
+                    else:
+                        m_to_do_dict[i] = [(v, j, e)]
+                    break
+    return m_to_do_dict
+
+
+def select_greedy_product(m_to_do_dict, t, not_do_dict):
+    tmp = {}
+    for key in m_to_do_dict.keys():
+        i = key
+        due_date = I[i].due_date
+        penalty = I[i].penalty
+        if t < due_date:
+            num_to_do_in_i = len(not_do_dict[i])
+            tmp[i] = penalty * num_to_do_in_i / (due_date - t)
+        else:
+            tmp[i] = penalty * (t - due_date)
+    min_value = max(tmp.values())
+    candidate_i = []
+    for key, value in tmp.items():
+        if value == min_value:
+            candidate_i.append(key)
+    if len(candidate_i) == 1:
+        selected_i = candidate_i[0]
+    else:
+        selected_i = random.choice(candidate_i)
+    return selected_i
+
+
+def calculate_time_cost(state_of_jobs, state_of_machines, selected_action):
+    selected_i = selected_action[0]
+    selected_v = selected_action[1]
+    selected_j = selected_action[2]
+    selected_e = selected_action[3]
+    selected_m = selected_action[4]
+    selected_g = selected_action[5]
+    previous_g = state_of_machines[selected_m].g
+    previous_e = state_of_machines[selected_m].e
+    previous_v = state_of_machines[selected_m].v
+    rt = 0
+    rc = 0
+    if previous_g != -1 and selected_g != previous_g:
+        rt = M[selected_m].RT[previous_g][selected_g]
+        rc = M[selected_m].RC[previous_g][selected_g]
+    st = 0
+    sc = 0
+    if selected_g != previous_g or selected_e != previous_e or \
+            selected_v != previous_v:
+        st = V[selected_v].ST[(selected_e, selected_m, selected_g)]
+        sc = V[selected_v].SC[(selected_e, selected_m, selected_g)]
+    mbt = state_of_machines[selected_m].mct + rt + st
+    jbt = max(state_of_jobs[selected_i][selected_v][selected_j].ect.values())
+    if jbt <= mbt:
+        jbt = mbt
+    pt = V[selected_v].PT[(selected_e, selected_m, selected_g)]
+    ct = jbt + pt
+    pc = V[selected_v].PC[(selected_e, selected_m, selected_g)]
+    cost = rc + sc + pc
+    return jbt, ct, cost
+
+
+def update_q_value(old_q_value, new_q_value):
+    if (old_q_value == [1, 0] and new_q_value == [1, 0]) or (
+            old_q_value == [1, 0] and new_q_value == [0.5, 0.5]) or (
+            old_q_value == [0.5, 0.5] and new_q_value == [1, 0]):
+        q_value = [1, 0]
+    elif (old_q_value == [0, 1] and new_q_value == [0, 1]) or (
+            old_q_value == [0, 1] and new_q_value == [0.5, 0.5]) or (
+            old_q_value == [0.5, 0.5] and new_q_value == [0, 1]):
+        q_value = [0, 1]
+    else:
+        q_value = [0.5, 0.5]
+    return q_value
+
+
+class Action:
+
+    def __init__(self):
+        self.m = -1
+        self.mt = 0
+        self.m_to_do = {}
+        self.i = -1
+        self.v = -1
+        self.j = -1
+        self.e = -1
+        self.g = -1
+        self.jbt = 0
+        self.ct = 0
+        self.cost = 0
+        self.q_value = [0, 0]
+
+    def define_action_m(self, state_of_machines, to_do_dict):
+        exclusion = []
+        action_m = select_machine(state_of_machines, exclusion)
+        m_to_do = set_m_to_do(to_do_dict, action_m)
+        while not m_to_do:
+            exclusion.append(action_m)
+            action_m = select_machine(state_of_machines, exclusion)
+            m_to_do = set_m_to_do(to_do_dict, action_m)
+        self.m = action_m
+        self.mt = state_of_machines[action_m].mct
+        self.m_to_do = m_to_do
+
+    def episode_of_shortest_time_policy(self, not_do_dict, to_do_dict,
+                                        state_of_jobs, state_of_machines):
+        self.i = select_greedy_product(self.m_to_do, self.mt, not_do_dict)
+        feasible_actions_jbt = {}
+        feasible_actions_ct = {}
+        feasible_actions_cost = {}
+        for vje in to_do_dict[self.i]:
+            for mg in OP[vje[2]].feasible_mg_pairs:
+                if mg[0] == self.m:
+                    f_a = (self.i, vje[0], vje[1], vje[2], self.m, mg[1])
+                    feasible_actions_jbt[f_a], feasible_actions_ct[f_a], \
+                    feasible_actions_cost[f_a] = calculate_time_cost(
+                        state_of_jobs, state_of_machines, f_a)
+        min_time = min(feasible_actions_ct.values())
+        min_cost = min(feasible_actions_cost.values())
+        actions = []
+        also_min_cost = 0
+        for key in feasible_actions_ct.keys():
+            if feasible_actions_ct[key] == min_time:
+                actions.append(key)
+                if feasible_actions_cost[key] == min_cost:
+                    also_min_cost = 1
+        if len(actions) == 1:
+            selected_action = actions[0]
+        else:
+            selected_action = random.choice(actions)
+        self.v = selected_action[1]
+        self.j = selected_action[2]
+        self.e = selected_action[3]
+        self.g = selected_action[5]
+        self.jbt = feasible_actions_jbt[selected_action]
+        self.ct = feasible_actions_ct[selected_action]
+        self.cost = feasible_actions_cost[selected_action]
+        if also_min_cost == 1:
+            self.q_value = [0.5, 0.5]
+        else:
+            self.q_value = [1, 0]
+
+    def episode_of_lowest_cost_policy(self, not_do_dict, to_do_dict,
+                                      state_of_jobs, state_of_machines):
+        self.i = select_greedy_product(self.m_to_do, self.mt, not_do_dict)
+        feasible_actions_jbt = {}
+        feasible_actions_ct = {}
+        feasible_actions_cost = {}
+        for vje in to_do_dict[self.i]:
+            for mg in OP[vje[2]].feasible_mg_pairs:
+                if mg[0] == self.m:
+                    f_a = (self.i, vje[0], vje[1], vje[2], self.m, mg[1])
+                    feasible_actions_jbt[f_a], feasible_actions_ct[f_a], \
+                    feasible_actions_cost[f_a] = calculate_time_cost(
+                        state_of_jobs, state_of_machines, f_a)
+        min_cost = min(feasible_actions_cost.values())
+        min_time = min(feasible_actions_ct.values())
+        actions = []
+        also_min_time = 0
+        for key in feasible_actions_cost.keys():
+            if feasible_actions_cost[key] == min_cost:
+                actions.append(key)
+                if feasible_actions_ct[key] == min_time:
+                    also_min_time = 1
+        if len(actions) == 1:
+            selected_action = actions[0]
+        else:
+            selected_action = random.choice(actions)
+        self.v = selected_action[1]
+        self.j = selected_action[2]
+        self.e = selected_action[3]
+        self.g = selected_action[5]
+        self.jbt = feasible_actions_jbt[selected_action]
+        self.ct = feasible_actions_ct[selected_action]
+        self.cost = min_cost
+        if also_min_time == 1:
+            self.q_value = [0.5, 0.5]
+        else:
+            self.q_value = [0, 1]
+
+    def choose_non_greedy_action(self, state_of_jobs, state_of_machines,
+                                 old_q_value):
+        # Act non-greedy
+        self.i = random.choice(list(self.m_to_do.keys()))
+        selected_vje = random.choice(self.m_to_do[self.i])
+        self.v = selected_vje[0]
+        self.j = selected_vje[1]
+        self.e = selected_vje[2]
+        tmp = []
+        for mg in OP[self.e].feasible_mg_pairs:
+            m = mg[0]
+            g = mg[1]
+            if m == self.m:
+                tmp.append(g)
+        if len(tmp) == 1:
+            self.g = tmp[0]
+        else:
+            self.g = random.choice(tmp)
+        ACTION = (self.i, self.v, self.j, self.e, self.m, self.g)
+        self.jbt, self.ct, self.cost = calculate_time_cost(
+            state_of_jobs, state_of_machines, ACTION)
+        self.q_value = old_q_value
+
+    def choose_greedy_vjeg(self, not_do_dict, to_do_dict, state_of_jobs,
+                           state_of_machines, old_q_value):
+        self.i = select_greedy_product(self.m_to_do, self.mt, not_do_dict)
+        feasible_actions_jbt = {}
+        feasible_actions_ct = {}
+        feasible_actions_cost = {}
+        for vje in to_do_dict[self.i]:
+            for mg in OP[vje[2]].feasible_mg_pairs:
+                if mg[0] == self.m:
+                    f_a = (self.i, vje[0], vje[1], vje[2], self.m, mg[1])
+                    feasible_actions_jbt[f_a], feasible_actions_ct[f_a], \
+                    feasible_actions_cost[f_a] = calculate_time_cost(
+                        state_of_jobs, state_of_machines, f_a)
+        min_time_value = min(feasible_actions_ct.values())
+        min_cost_value = min(feasible_actions_cost.values())
+        min_time_actions = {}
+        min_cost_actions = {}
+        for key in feasible_actions_jbt.keys():
+            if feasible_actions_ct[key] == min_time_value:
+                min_time_actions[key] = feasible_actions_cost[key]
+            if feasible_actions_cost[key] == min_cost_value:
+                min_cost_actions[key] = feasible_actions_ct[key]
+        min_time_cost = min(min_time_actions.values())
+        min_cost_time = min(min_cost_actions.values())
+        min_time_cost_actions = []
+        for key in min_time_actions.keys():
+            if min_time_actions[key] == min_time_cost:
+                min_time_cost_actions.append(key)
+        min_cost_time_actions = []
+        for key in min_cost_actions.keys():
+            if min_cost_actions[key] == min_cost_time:
+                min_cost_time_actions.append(key)
+        # update Q-value
+        fraction_p1 = min_time_cost / min_cost_value
+        fraction_p2 = min_cost_time / min_time_value
+        if fraction_p1 < fraction_p2:
+            new_q_value = [1, 0]
+        elif fraction_p1 > fraction_p2:
+            new_q_value = [0, 1]
+        else:
+            if len(min_time_cost_actions) > len(min_cost_time_actions):
+                new_q_value = [1, 0]
+            elif len(min_time_cost_actions) < len(min_cost_time_actions):
+                new_q_value = [0, 1]
+            else:
+                new_q_value = [0.5, 0.5]
+        self.q_value = update_q_value(old_q_value, new_q_value)
+        if self.q_value == [1, 0]:
+            selected_action = random.choice(min_time_cost_actions)
+        elif self.q_value == [0, 1]:
+            selected_action = random.choice(min_cost_time_actions)
+        else:
+            tmp_action = min_time_cost_actions
+            tmp_action.extend(min_cost_time_actions)
+            selected_action = random.choice(tmp_action)
+        self.v = selected_action[1]
+        self.j = selected_action[2]
+        self.e = selected_action[3]
+        self.g = selected_action[5]
+        self.jbt = feasible_actions_jbt[selected_action]
+        self.ct = feasible_actions_ct[selected_action]
+        self.cost = feasible_actions_cost[selected_action]
+
+
+class Update:
+
+    def __init__(self, selected_action):
+        self.m = selected_action.m
+        self.i = selected_action.i
+        self.v = selected_action.v
+        self.j = selected_action.j
+        self.e = selected_action.e
+        self.g = selected_action.g
+        self.jbt = selected_action.jbt
+        self.ct = selected_action.ct
+
+    def update_state_of_jobs(self, state_of_jobs):
+        state_of_jobs[self.i][self.v][self.j].ebt[self.e] = self.jbt
+        state_of_jobs[self.i][self.v][self.j].ect[self.e] = self.ct
+        state_of_jobs[self.i][self.v][self.j].em[self.e] = self.m
+        state_of_jobs[self.i][self.v][self.j].eg[self.e] = self.g
+        return state_of_jobs
+
+    def update_ict(self, state_of_jobs, ict_dict):
+        state_of_i = state_of_jobs[self.i]
+        tmp = []
+        for v, value in state_of_i.items():
+            for j, sheet in value.items():
+                tmp.append(max(sheet.ect.values()))
+        ict_dict[self.i] = max(tmp)
+        return ict_dict
+
+    def update_no_do(self, not_do_dict):
+        not_do_dict[self.i].remove((self.v, self.j, self.e))
+        return not_do_dict
+
+    def update_to_do(self, state_of_jobs, not_do_dict, to_do_dict):
+        to_do_dict[self.i] = set_to_do(state_of_jobs[self.i],
+                                       not_do_dict[self.i])
+        return to_do_dict
+
+    def update_state_of_machines(self, state_of_machines):
+        state_of_machines[self.m].mct = self.ct
+        state_of_machines[self.m].g = self.g
+        state_of_machines[self.m].e = self.e
+        state_of_machines[self.m].v = self.v
+        return state_of_machines
+
+
+class Solution:
+    """ save the two objectives' values and the decision variables' values of
+    the solution """
+
+    def __init__(self, obj1, obj2, process_plan):
+        self.f1 = obj1
+        self.f2 = obj2
+        self.solution = process_plan
+
+
+def calculate_f1(ict_dict):
+    value = 0
+    for i in range(len(I)):
+        if ict_dict[i] > I[i].due_date:
+            value = value + I[i].penalty * (ict_dict[i] - I[i].due_date)
+    return value
+
+
+# Press the green button in the gutter to run the script.
+if __name__ == '__main__':
+    Q_table_old = [[0, 0] for n in range(NUM_STATES)]
+    Q_table_new = [[0, 0] for n in range(NUM_STATES)]
+    pareto_optimal_solution = []
+    Q_table_no_change = 0
+    for episode in range(NUM_EPISODES + 2):
+        f2 = 0
+        # define product completion time
+        ict = {}
+        # define a jobs_progress dict to record operations execution information
+        jobs_progress = {}
+        # define a dict to collect all unperformed operations in each product
+        not_do = {}
+        # define a dict to collect all pending operations in each product
+        to_do = {}
+        # initialize the above four dicts
+        for i in I:
+            ict[i.product_id] = 0
+            jobs_progress[i.product_id] = {}
+            not_do[i.product_id] = []
+            to_do[i.product_id] = {}
+            for v in i.J.keys():
+                jobs_progress[i.product_id][v] = {}
+                for j in range(i.J[v]):
+                    jobs_progress[i.product_id][v][j] = Job_Sheet(v)
+                    for e in V[v].VP:
+                        not_do[i.product_id].append((v, j, e))
+            to_do[i.product_id] = set_to_do(
+                jobs_progress[i.product_id], not_do[i.product_id])
+        # define a dict to record machines' last performing information
+        machines_state = {}
+        # initialize the machines_state dict
+        for m in M:
+            machines_state[m.machine_id] = Machine_Sheet()
+        if episode == 0:  # special_episode_for_old_Q_table_&_f1&f2
+            for state_ordinal in range(NUM_STATES):
+                action = Action()
+                action.define_action_m(machines_state, to_do)
+                action.episode_of_shortest_time_policy(
+                    not_do, to_do, jobs_progress, machines_state)
+                update = Update(action)
+                # update state of jobs
+                jobs_progress = update.update_state_of_jobs(jobs_progress)
+                # update ict
+                ict = update.update_ict(jobs_progress, ict)
+                # update no do dict
+                no_do = update.update_no_do(not_do)
+                # update to do dict
+                to_do = update.update_to_do(jobs_progress, not_do, to_do)
+                # update state of machines
+                machines_state = update.update_state_of_machines(machines_state)
+                # initial old Q-table
+                Q_table_old[state_ordinal] = action.q_value
+                # calculate f2
+                f2 = f2 + action.cost
+            # calculate f1
+            f1 = calculate_f1(ict)
+            pareto_optimal_solution.append(Solution(f1, f2, jobs_progress))
+            continue
+        elif episode == 1:  # special_episode_for_new_Q_table_&_f1&f2
+            for state_ordinal in range(NUM_STATES):
+                action = Action()
+                action.define_action_m(machines_state, to_do)
+                action.episode_of_lowest_cost_policy(
+                    not_do, to_do, jobs_progress, machines_state)
+                update = Update(action)
+                # update state of jobs
+                jobs_progress = update.update_state_of_jobs(jobs_progress)
+                # update ict
+                ict = update.update_ict(jobs_progress, ict)
+                # update no do dict
+                no_do = update.update_no_do(not_do)
+                # update to do dict
+                to_do = update.update_to_do(jobs_progress, not_do, to_do)
+                # update state of machines
+                machines_state = update.update_state_of_machines(machines_state)
+                # update new Q-table
+                Q_table_new[state_ordinal] = action.q_value
+                # calculate f2
+                f2 = f2 + action.cost
+            # calculate f1
+            f1 = calculate_f1(ict)
+            solution = Solution(f1, f2, jobs_progress)
+        else:
+            for state_ordinal in range(NUM_STATES):
+                action = Action()
+                action.define_action_m(machines_state, to_do)
+                if np.random.uniform() > EPSILON:  # act non-greedy
+                    action.choose_non_greedy_action(
+                        jobs_progress, machines_state,
+                        Q_table_old[state_ordinal])
+                else:  # act greedy
+                    action.choose_greedy_vjeg(
+                        not_do, to_do, jobs_progress, machines_state,
+                        Q_table_old[state_ordinal])
+                update = Update(action)
+                # update state of jobs
+                jobs_progress = update.update_state_of_jobs(jobs_progress)
+                # update ict
+                ict = update.update_ict(jobs_progress, ict)
+                # update no do dict
+                no_do = update.update_no_do(not_do)
+                # update to do dict
+                to_do = update.update_to_do(jobs_progress, not_do, to_do)
+                # update state of machines
+                machines_state = update.update_state_of_machines(machines_state)
+                # update new Q-table
+                Q_table_new[state_ordinal] = action.q_value
+                # calculate f2
+                f2 = f2 + action.cost
+            # calculate f1
+            f1 = calculate_f1(ict)
+            solution = Solution(f1, f2, jobs_progress)
+        # update old Q-table
+        remove_list = []
+        for s in range(len(pareto_optimal_solution)):
+            if (solution.f1 < pareto_optimal_solution[s].f1 and
+                solution.f2 < pareto_optimal_solution[s].f2) or (
+                    solution.f1 < pareto_optimal_solution[s].f1 and
+                    solution.f2 == pareto_optimal_solution[s].f2) or (
+                    solution.f1 == pareto_optimal_solution[s].f1 and
+                    solution.f2 < pareto_optimal_solution[s].f2):
+                remove_list.append(s)
+            elif (solution.f1 > pareto_optimal_solution[s].f1 and
+                  solution.f2 > pareto_optimal_solution[s].f2) or (
+                    solution.f1 > pareto_optimal_solution[s].f1 and
+                    solution.f2 == pareto_optimal_solution[s].f2) or (
+                    solution.f1 == pareto_optimal_solution[s].f1 and
+                    solution.f2 > pareto_optimal_solution[s].f2):
+                break
+            elif solution.f1 == pareto_optimal_solution[s].f1 and \
+                    solution.f2 == pareto_optimal_solution[s].f2:
+                ready = 1
+                for state_ordinal in range(NUM_STATES):
+                    tmp = Q_table_old[state_ordinal]
+                    Q_table_old[state_ordinal] = update_q_value(
+                        Q_table_old[state_ordinal], Q_table_new[state_ordinal])
+                    if Q_table_old[state_ordinal][0] != tmp[0] or \
+                            Q_table_old[state_ordinal][1] != tmp[1]:
+                        ready = 0
+                if ready == 1:
+                    Q_table_no_change = Q_table_no_change + 1
+                break
+        else:
+            if pareto_optimal_solution:
+                ready = 1
+                for state_ordinal in range(NUM_STATES):
+                    tmp = Q_table_old[state_ordinal]
+                    Q_table_old[state_ordinal] = update_q_value(
+                        Q_table_old[state_ordinal], Q_table_new[state_ordinal])
+                    if Q_table_old[state_ordinal][0] != tmp[0] or \
+                            Q_table_old[state_ordinal][1] != tmp[1]:
+                        ready = 0
+                if ready == 1:
+                    Q_table_no_change = Q_table_no_change + 1
+                else:
+                    Q_table_no_change = 0
+            else:
+                ready = 1
+                for state_ordinal in range(NUM_STATES):
+                    tmp = Q_table_old[state_ordinal]
+                    Q_table_old[state_ordinal] = Q_table_new[state_ordinal]
+                    if Q_table_old[state_ordinal][0] != tmp[0] or \
+                            Q_table_old[state_ordinal][1] != tmp[1]:
+                        ready = 0
+                if ready == 1:
+                    Q_table_no_change = Q_table_no_change + 1
+                else:
+                    Q_table_no_change = 0
+            pareto_optimal_solution.append(solution)
+        tp = []
+        for s in range(len(pareto_optimal_solution)):
+            if s not in remove_list:
+                tp.append(pareto_optimal_solution[s])
+        pareto_optimal_solution = tp
+        if Q_table_no_change == int(math.pow(3, int(NUM_STATES / 4))):
+            break
+    for s in pareto_optimal_solution:
+        print(s.f1, s.f2)
+        rho = [[[] for v in V] for i in I]
+        alpha = [[[] for v in V] for i in I]
+        phi = [[[] for v in V] for i in I]
+        beta = [[[] for v in V] for i in I]
+        for i in I:
+            for v in V:
+                if v.part_variant_id in i.J.keys():
+                    rho[i.product_id][v.part_variant_id] = [[] for j in range(
+                        i.J[v.part_variant_id])]
+                    alpha[i.product_id][v.part_variant_id] = [[] for j in range(
+                        i.J[v.part_variant_id])]
+                    phi[i.product_id][v.part_variant_id] = [[] for j in range(
+                        i.J[v.part_variant_id])]
+                    beta[i.product_id][v.part_variant_id] = [[] for j in range(
+                        i.J[v.part_variant_id])]
+                    for j in range(i.J[v.part_variant_id]):
+                        op_bt = sorted(s.solution[i.product_id][
+                                           v.part_variant_id][j].ebt.items(),
+                                       key=lambda kv: (kv[1], kv[0]))
+                        for q in range(len(v.VP)):
+                            rho[i.product_id][v.part_variant_id][j].append(
+                                op_bt[q][0])
+                            alpha[i.product_id][v.part_variant_id][j].append(
+                                s.solution[i.product_id][v.part_variant_id][
+                                    j].em[op_bt[q][0]]
+                            )
+                            phi[i.product_id][v.part_variant_id][j].append(
+                                s.solution[i.product_id][v.part_variant_id][
+                                    j].eg[op_bt[q][0]]
+                            )
+                            beta[i.product_id][v.part_variant_id][j].append(
+                                op_bt[q][1])
+        print(rho)
+        print(alpha)
+        print(phi)
+        print(beta)
+        print('')
+    p1 = time.process_time()
+    print(p1 - p0)
