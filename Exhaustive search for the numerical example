@@ -1,6 +1,6 @@
 # Mass Customization (MC) on a Reconfigurable Manufacturing System (RMS)
 # Minimize the tardiness penalty cost and total cost
-# Exhaustive search is applied to get the exact optimal solutions
+# Exhaustive search is applied to get the exact Pareto-optimal solutions
 
 
 import numpy as np
