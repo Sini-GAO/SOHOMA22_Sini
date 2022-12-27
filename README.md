@@ -7,5 +7,3 @@ It has:
       (2) The exact Pareto-optimal solutions for the numerical example;
       (3) The Q-learning solution approach code for the numerical example;
       (4) The approximate Pareto-optimal solutions for the numerical example.
-
-(1) and (3) will be shared after the manuscript is accepted.
